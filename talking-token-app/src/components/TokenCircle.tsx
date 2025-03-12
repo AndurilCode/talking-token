@@ -1,5 +1,6 @@
 import React from 'react';
-import { Box, Paper, Typography, Avatar, Tooltip } from '@mui/material';
+import { Box, Paper, Typography, Avatar, Tooltip, IconButton, Button } from '@mui/material';
+import AddIcon from '@mui/icons-material/Add';
 import { Participant } from '../types';
 import { calculateCirclePosition } from '../utils/helpers';
 
@@ -8,13 +9,15 @@ interface TokenCircleProps {
   currentHolderId: string | null;
   previousHolderId: string | null;
   onParticipantClick: (id: string) => void;
+  onAddParticipant?: () => void;
 }
 
 const TokenCircle: React.FC<TokenCircleProps> = ({
   participants,
   currentHolderId,
   previousHolderId,
-  onParticipantClick
+  onParticipantClick,
+  onAddParticipant
 }) => {
   // Skip rendering if no participants
   if (participants.length === 0) {
@@ -23,9 +26,31 @@ const TokenCircle: React.FC<TokenCircleProps> = ({
         <Typography variant="h6" gutterBottom>
           Token Circle
         </Typography>
-        <Typography variant="body1" color="text.secondary" sx={{ py: 4 }}>
-          Add participants to visualize the token circle.
-        </Typography>
+        <Box sx={{ 
+          py: 4, 
+          display: 'flex', 
+          flexDirection: 'column', 
+          alignItems: 'center',
+          justifyContent: 'center'
+        }}>
+          <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
+            Add participants to visualize the token circle.
+          </Typography>
+          {onAddParticipant && (
+            <Button
+              variant="contained"
+              color="primary"
+              startIcon={<AddIcon />}
+              onClick={onAddParticipant}
+              sx={{
+                borderRadius: '28px',
+                px: 3
+              }}
+            >
+              Add Participant
+            </Button>
+          )}
+        </Box>
       </Paper>
     );
   }
@@ -34,6 +59,7 @@ const TokenCircle: React.FC<TokenCircleProps> = ({
   const circleRadius = 150;
   const participantSize = 50;
   const containerSize = circleRadius * 2 + participantSize;
+  const tableRadius = circleRadius * 0.7; // Table size (70% of the circle)
 
   // Get participant by ID helper
   const getParticipantById = (id: string | null) => {
@@ -47,9 +73,35 @@ const TokenCircle: React.FC<TokenCircleProps> = ({
 
   return (
     <Paper elevation={3} sx={{ p: 3, mb: 3 }}>
-      <Typography variant="h6" gutterBottom>
-        Token Circle
-      </Typography>
+      <Box sx={{ 
+        display: 'flex', 
+        justifyContent: 'space-between', 
+        alignItems: 'center',
+        mb: 2
+      }}>
+        <Typography variant="h6">
+          Token Circle
+        </Typography>
+        {onAddParticipant && (
+          <IconButton 
+            color="primary" 
+            size="small"
+            onClick={onAddParticipant}
+            aria-label="Add participant"
+            sx={{
+              bgcolor: 'primary.main',
+              color: 'white',
+              '&:hover': {
+                bgcolor: 'primary.dark',
+              },
+              width: 36,
+              height: 36
+            }}
+          >
+            <AddIcon />
+          </IconButton>
+        )}
+      </Box>
       
       <Box sx={{ 
         width: containerSize, 
@@ -58,7 +110,21 @@ const TokenCircle: React.FC<TokenCircleProps> = ({
         margin: '0 auto',
         mt: 2
       }}>
-        {/* Draw circle */}
+        {/* Draw table */}
+        <Box sx={{ 
+          width: tableRadius * 2, 
+          height: tableRadius * 2, 
+          borderRadius: '50%', 
+          backgroundColor: '#f5f5f5',
+          border: '1px solid #e0e0e0',
+          boxShadow: 'inset 0 0 10px rgba(0,0,0,0.1)',
+          position: 'absolute',
+          top: containerSize / 2 - tableRadius,
+          left: containerSize / 2 - tableRadius,
+          zIndex: 0
+        }} />
+        
+        {/* Draw circle for participants */}
         <Box sx={{ 
           width: circleRadius * 2, 
           height: circleRadius * 2, 
@@ -66,7 +132,8 @@ const TokenCircle: React.FC<TokenCircleProps> = ({
           border: '2px dashed #ccc',
           position: 'absolute',
           top: participantSize / 2,
-          left: participantSize / 2
+          left: participantSize / 2,
+          zIndex: 1
         }} />
         
         {/* Draw participants */}
@@ -110,7 +177,11 @@ const TokenCircle: React.FC<TokenCircleProps> = ({
                   transition: 'all 0.3s ease',
                   '&:hover': {
                     transform: 'scale(1.1)',
-                  }
+                  },
+                  zIndex: 2,
+                  boxShadow: isCurrentHolder 
+                    ? '0 0 15px rgba(76, 175, 80, 0.7)' 
+                    : '0 2px 5px rgba(0,0,0,0.2)'
                 }}
                 onClick={() => onParticipantClick(participant.id)}
               >
@@ -133,13 +204,30 @@ const TokenCircle: React.FC<TokenCircleProps> = ({
       </Box>
       
       <Box sx={{ mt: 3, textAlign: 'center' }}>
-        <Typography variant="body2" color="text.secondary">
+        <Typography variant="body1" color="text.secondary">
           Click on a participant to pass the token
         </Typography>
         {currentHolder && (
-          <Typography variant="subtitle1" sx={{ mt: 1 }}>
-            Current Speaker: <strong>{currentHolder.name}</strong>
-          </Typography>
+          <Box sx={{ mt: 2 }}>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+              Current Speaker:
+            </Typography>
+            <Box sx={{ 
+              p: 2, 
+              borderRadius: 2, 
+              bgcolor: 'primary.light', 
+              display: 'inline-block',
+              minWidth: '180px'
+            }}>
+              <Typography sx={{ 
+                fontWeight: 'bold', 
+                fontSize: '1.5rem',
+                color: 'primary.contrastText'
+              }}>
+                {currentHolder.name}
+              </Typography>
+            </Box>
+          </Box>
         )}
       </Box>
     </Paper>
@@ -225,18 +313,6 @@ const TokenPassingArrow: React.FC<TokenPassingArrowProps> = ({
       height={containerSize}
       style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }}
     >
-      <defs>
-        <marker
-          id="arrowhead"
-          markerWidth="10"
-          markerHeight="7"
-          refX="0"
-          refY="3.5"
-          orient="auto"
-        >
-          <polygon points="0 0, 10 3.5, 0 7" fill="#ff9800" />
-        </marker>
-      </defs>
       <line
         x1={adjustedX1}
         y1={adjustedY1}

@@ -1,8 +1,9 @@
 import React, { useEffect, useRef } from 'react';
-import { Box, Typography, Button, LinearProgress, Paper } from '@mui/material';
+import { Box, Typography, Button, LinearProgress, Paper, Tooltip } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import PauseIcon from '@mui/icons-material/Pause';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
+import SkipNextIcon from '@mui/icons-material/SkipNext';
 import { useTimer } from '../hooks/useTimer';
 
 interface TokenTimerProps {
@@ -12,6 +13,7 @@ interface TokenTimerProps {
   onTimerStart: () => void;
   onTimerPause: () => void;
   onTimerReset: () => void;
+  onPassToken: () => void;
   currentHolder: string | null;
 }
 
@@ -22,6 +24,7 @@ const TokenTimer: React.FC<TokenTimerProps> = ({
   onTimerStart,
   onTimerPause,
   onTimerReset,
+  onPassToken,
   currentHolder
 }) => {
   const { time, startTimer, pauseTimer, resetTimer, formatTime } = useTimer({
@@ -59,6 +62,10 @@ const TokenTimer: React.FC<TokenTimerProps> = ({
     onTimerReset();
   };
 
+  const handlePass = () => {
+    onPassToken();
+  };
+
   // Calculate progress percentage
   const progress = (time / initialTime) * 100;
   
@@ -77,10 +84,6 @@ const TokenTimer: React.FC<TokenTimerProps> = ({
       
       {currentHolder ? (
         <>
-          <Typography variant="subtitle1" gutterBottom>
-            Current Speaker: <strong>{currentHolder}</strong>
-          </Typography>
-          
           <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
             <Typography variant="h3" sx={{ fontFamily: 'monospace', flex: 1, textAlign: 'center' }}>
               {formatTime(time)}
@@ -94,7 +97,7 @@ const TokenTimer: React.FC<TokenTimerProps> = ({
             sx={{ height: 10, borderRadius: 5, mb: 2 }}
           />
           
-          <Box sx={{ display: 'flex', justifyContent: 'center', gap: 2 }}>
+          <Box sx={{ display: 'flex', justifyContent: 'center', gap: 2, flexWrap: 'wrap' }}>
             {isActive ? (
               <Button 
                 variant="contained" 
@@ -122,6 +125,17 @@ const TokenTimer: React.FC<TokenTimerProps> = ({
             >
               Reset
             </Button>
+            
+            <Tooltip title="Pass the token without speaking">
+              <Button 
+                variant="contained" 
+                color="warning" 
+                startIcon={<SkipNextIcon />}
+                onClick={handlePass}
+              >
+                Pass
+              </Button>
+            </Tooltip>
           </Box>
         </>
       ) : (

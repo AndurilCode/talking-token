@@ -5,21 +5,14 @@ import {
   Button, 
   List, 
   ListItem, 
-  ListItemText, 
   IconButton, 
   Typography,
   Paper,
   Chip,
-  Tooltip,
   Dialog,
   DialogTitle,
   DialogContent,
-  DialogActions,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
-  SelectChangeEvent
+  DialogActions
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
@@ -93,7 +86,7 @@ const TopicManager: React.FC<TopicManagerProps> = ({
   };
 
   return (
-    <Paper elevation={3} sx={{ p: 3, mb: 3 }}>
+    <Paper elevation={3} sx={{ p: 3, mb: 3, maxWidth: '100%', overflow: 'hidden' }}>
       <Typography variant="h6" gutterBottom>
         Topics
       </Typography>
@@ -124,6 +117,7 @@ const TopicManager: React.FC<TopicManagerProps> = ({
           onClick={handleAddTopic}
           disabled={!newTopicTitle.trim()}
           fullWidth
+          sx={{ mt: 1 }}
         >
           Add Topic
         </Button>
@@ -134,58 +128,94 @@ const TopicManager: React.FC<TopicManagerProps> = ({
           {topics.map((topic) => (
             <ListItem
               key={topic.id}
-              secondaryAction={
-                <Box>
-                  <IconButton 
-                    edge="end" 
-                    aria-label="edit"
-                    onClick={() => handleOpenEditDialog(topic)}
-                    sx={{ mr: 1 }}
-                  >
-                    <EditIcon />
-                  </IconButton>
-                  <IconButton 
-                    edge="end" 
-                    aria-label="delete"
-                    onClick={() => onRemoveTopic(topic.id)}
-                  >
-                    <DeleteIcon />
-                  </IconButton>
-                </Box>
-              }
               sx={{
                 bgcolor: topic.id === currentTopicId ? 'rgba(33, 150, 243, 0.1)' : 'transparent',
                 borderLeft: topic.id === currentTopicId ? '4px solid #2196f3' : 'none',
-                pl: topic.id === currentTopicId ? 2 : 2
+                pl: topic.id === currentTopicId ? 2 : 2,
+                pr: 9, // Add right padding to make room for action buttons
+                position: 'relative',
+                mb: 1,
+                borderRadius: 1
               }}
             >
-              <IconButton 
-                size="small" 
-                onClick={() => handleSetActiveTopic(topic.id)}
-                sx={{ mr: 1 }}
-              >
-                {topic.id === currentTopicId ? (
-                  <CheckCircleIcon color="primary" />
-                ) : (
-                  <RadioButtonUncheckedIcon />
-                )}
-              </IconButton>
-              <ListItemText 
-                primary={
-                  <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                    {topic.title}
+              <Box sx={{ display: 'flex', alignItems: 'flex-start', width: '100%' }}>
+                <IconButton 
+                  size="small" 
+                  onClick={() => handleSetActiveTopic(topic.id)}
+                  sx={{ mr: 1, mt: 0.5 }}
+                >
+                  {topic.id === currentTopicId ? (
+                    <CheckCircleIcon color="primary" />
+                  ) : (
+                    <RadioButtonUncheckedIcon />
+                  )}
+                </IconButton>
+                <Box sx={{ flexGrow: 1, overflow: 'hidden', mr: 2 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <Typography 
+                      variant="body1" 
+                      sx={{ 
+                        fontWeight: 'medium',
+                        mr: 1,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis'
+                      }}
+                    >
+                      {topic.title}
+                    </Typography>
                     {topic.id === currentTopicId && (
                       <Chip 
                         label="Current" 
                         color="primary" 
                         size="small" 
-                        sx={{ ml: 1 }}
+                        sx={{ ml: 0.5 }}
                       />
                     )}
                   </Box>
-                }
-                secondary={topic.description}
-              />
+                  {topic.description && (
+                    <Typography 
+                      variant="body2" 
+                      color="text.secondary"
+                      sx={{
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical'
+                      }}
+                    >
+                      {topic.description}
+                    </Typography>
+                  )}
+                </Box>
+              </Box>
+              <Box 
+                sx={{ 
+                  position: 'absolute', 
+                  right: 8, 
+                  top: '50%', 
+                  transform: 'translateY(-50%)',
+                  display: 'flex'
+                }}
+              >
+                <IconButton 
+                  edge="end" 
+                  aria-label="edit"
+                  onClick={() => handleOpenEditDialog(topic)}
+                  size="small"
+                  sx={{ mr: 0.5 }}
+                >
+                  <EditIcon fontSize="small" />
+                </IconButton>
+                <IconButton 
+                  edge="end" 
+                  aria-label="delete"
+                  onClick={() => onRemoveTopic(topic.id)}
+                  size="small"
+                >
+                  <DeleteIcon fontSize="small" />
+                </IconButton>
+              </Box>
             </ListItem>
           ))}
         </List>
@@ -196,7 +226,7 @@ const TopicManager: React.FC<TopicManagerProps> = ({
       )}
 
       {/* Edit Dialog */}
-      <Dialog open={editDialogOpen} onClose={handleCloseEditDialog}>
+      <Dialog open={editDialogOpen} onClose={handleCloseEditDialog} maxWidth="sm" fullWidth>
         <DialogTitle>Edit Topic</DialogTitle>
         <DialogContent>
           <TextField

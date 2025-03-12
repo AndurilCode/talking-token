@@ -1,6 +1,5 @@
 import React from 'react';
 import { 
-  Paper, 
   Typography, 
   Table, 
   TableBody, 
@@ -14,6 +13,7 @@ import {
 } from '@mui/material';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import RemoveCircleIcon from '@mui/icons-material/RemoveCircle';
+import PanToolIcon from '@mui/icons-material/PanTool';
 import { Participant, Topic, ParticipantTopicStatus } from '../types';
 
 interface ParticipationTrackerProps {
@@ -32,14 +32,14 @@ const ParticipationTracker: React.FC<ParticipationTrackerProps> = ({
   // Skip rendering if no participants or topics
   if (participants.length === 0 || topics.length === 0) {
     return (
-      <Paper elevation={3} sx={{ p: 3, mb: 3 }}>
+      <Box sx={{ p: 3, mb: 3 }}>
         <Typography variant="h6" gutterBottom>
           Participation Tracker
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>
           Add both participants and topics to track participation.
         </Typography>
-      </Paper>
+      </Box>
     );
   }
 
@@ -77,12 +77,8 @@ const ParticipationTracker: React.FC<ParticipationTrackerProps> = ({
   const stats = calculateStats();
 
   return (
-    <Paper elevation={3} sx={{ p: 3, mb: 3 }}>
-      <Typography variant="h6" gutterBottom>
-        Participation Tracker
-      </Typography>
-      
-      <TableContainer component={Paper} variant="outlined" sx={{ mb: 3 }}>
+    <Box sx={{ width: '100%' }}>
+      <TableContainer sx={{ mb: 3, width: '100%' }}>
         <Table size="small">
           <TableHead>
             <TableRow sx={{ bgcolor: 'rgba(0, 0, 0, 0.04)' }}>
@@ -131,6 +127,15 @@ const ParticipationTracker: React.FC<ParticipationTrackerProps> = ({
                             </Typography>
                           </Box>
                         </Tooltip>
+                      ) : status?.hasPassed ? (
+                        <Tooltip title={`Passed: ${status.passCount} times`}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <PanToolIcon sx={{ color: 'warning.main' }} />
+                            <Typography variant="caption" sx={{ ml: 0.5, fontWeight: 'bold' }}>
+                              {status.passCount}
+                            </Typography>
+                          </Box>
+                        </Tooltip>
                       ) : (
                         <Tooltip title="Has not spoken on this topic">
                           <RemoveCircleIcon color="disabled" />
@@ -149,7 +154,7 @@ const ParticipationTracker: React.FC<ParticipationTrackerProps> = ({
         Participation Summary
       </Typography>
       
-      <TableContainer component={Paper} variant="outlined">
+      <TableContainer sx={{ width: '100%' }}>
         <Table size="small">
           <TableHead>
             <TableRow sx={{ bgcolor: 'rgba(0, 0, 0, 0.04)' }}>
@@ -175,7 +180,7 @@ const ParticipationTracker: React.FC<ParticipationTrackerProps> = ({
           </TableBody>
         </Table>
       </TableContainer>
-    </Paper>
+    </Box>
   );
 };
 

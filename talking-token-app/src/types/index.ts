@@ -17,8 +17,10 @@ export interface ParticipantTopicStatus {
   participantId: string;
   topicId: string;
   hasSpoken: boolean;
+  hasPassed: boolean;  // Whether the participant has passed on this topic
   speakingTime: number;
   turnCount: number;
+  passCount: number;   // Number of times they've passed on this topic
 }
 
 export interface TokenState {
@@ -30,4 +32,4 @@ export interface TokenState {
   currentTopicId: string | null; // Current active topic
 }
 
-export type TokenPassMethod = 'manual' | 'automatic' | 'facilitator'; 
+export type TokenPassMethod = 'automatic' | 'facilitator'; 
