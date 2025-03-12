@@ -15,8 +15,10 @@ import AddIcon from '@mui/icons-material/Add';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
-import { Participant, TokenState, TokenPassMethod, Topic, ParticipantTopicStatus } from './types';
+import { Participant, TokenState, TokenPassMethod, Topic, ParticipantTopicStatus, AppState } from './types';
 import { saveToLocalStorage, loadFromLocalStorage } from './utils/helpers';
+import { generateMeetingStats } from './utils/meetingStats';
+import { useTimerWorker } from './hooks/useTimerWorker';
 import './App.css';
 
 // Import components
@@ -29,6 +31,7 @@ import ParticipationTracker from './components/ParticipationTracker';
 import ParticipantRules from './components/ParticipantRules';
 import FacilitatorGuide from './components/FacilitatorGuide';
 import AddTopicForm from './components/AddTopicForm';
+import MeetingRecap from './components/MeetingRecap';
 
 // Import Google Fonts in index.html or add this to your CSS
 // @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@600&family=Poppins:wght@500;700&display=swap');
@@ -65,6 +68,8 @@ const STORAGE_KEYS = {
   SETTINGS: 'talking-token-settings',
   TOPICS: 'talking-token-topics',
   PARTICIPANT_TOPIC_STATUS: 'talking-token-participant-topic-status',
+  APP_STATE: 'talking-token-app-state',
+  MEETING_STATS: 'talking-token-meeting-stats',
 };
 
 type ActionSection = 'participants' | 'topics' | 'settings' | 'facilitator-guide' | null;
@@ -101,6 +106,23 @@ function App() {
   const [participantTopicStatus, setParticipantTopicStatus] = useState<ParticipantTopicStatus[]>(() => 
     loadFromLocalStorage<ParticipantTopicStatus[]>(STORAGE_KEYS.PARTICIPANT_TOPIC_STATUS, [])
   );
+
+  // State for app state (meeting or recap)
+  const [appState, setAppState] = useState<AppState>(() => 
+    loadFromLocalStorage<AppState>(STORAGE_KEYS.APP_STATE, {
+      isInMeeting: true,
+      currentMeetingStats: null
+    })
+  );
+  
+  // State for meeting start time
+  const [meetingStartTime, setMeetingStartTime] = useState<number>(() => {
+    // If we're in a meeting, set the start time to now if not already set
+    if (appState.isInMeeting && !appState.currentMeetingStats) {
+      return Date.now();
+    }
+    return 0;
+  });
 
   // Menu state
   const [menuAnchorEl, setMenuAnchorEl] = useState<null | HTMLElement>(null);
@@ -182,6 +204,61 @@ function App() {
 
   useEffect(() => {
     saveToLocalStorage(STORAGE_KEYS.PARTICIPANT_TOPIC_STATUS, participantTopicStatus);
+  }, [participantTopicStatus]);
+
+  // Save app state to local storage when it changes
+  useEffect(() => {
+    saveToLocalStorage(STORAGE_KEYS.APP_STATE, appState);
+  }, [appState]);
+  
+  // Initialize meeting start time when app loads
+  useEffect(() => {
+    if (appState.isInMeeting && meetingStartTime === 0) {
+      setMeetingStartTime(Date.now());
+    }
+  }, [appState.isInMeeting, meetingStartTime]);
+
+  // Handle timer updates from the Web Worker
+  const handleTimerUpdate = useCallback((time: number) => {
+    if (tokenState.currentHolder && tokenState.currentTopicId) {
+      setParticipantTopicStatus(prev => {
+        return prev.map(status => {
+          if (status.participantId === tokenState.currentHolder && 
+              status.topicId === tokenState.currentTopicId) {
+            return {
+              ...status,
+              speakingTime: status.speakingTime + time
+            };
+          }
+          return status;
+        });
+      });
+    }
+  }, [tokenState.currentHolder, tokenState.currentTopicId]);
+
+  // Initialize the timer worker
+  const { startTimer, stopTimer, resetTimer } = useTimerWorker(handleTimerUpdate);
+
+  // Control the timer worker based on token state
+  useEffect(() => {
+    if (tokenState.isActive && tokenState.currentHolder && tokenState.currentTopicId) {
+      startTimer();
+    } else {
+      stopTimer();
+    }
+    
+    return () => {
+      stopTimer();
+    };
+  }, [tokenState.isActive, tokenState.currentHolder, tokenState.currentTopicId, startTimer, stopTimer]);
+
+  // Debounce saving participantTopicStatus to localStorage to prevent UI freezes
+  useEffect(() => {
+    const saveTimeout = setTimeout(() => {
+      saveToLocalStorage(STORAGE_KEYS.PARTICIPANT_TOPIC_STATUS, participantTopicStatus);
+    }, 500); // Debounce for 500ms
+    
+    return () => clearTimeout(saveTimeout);
   }, [participantTopicStatus]);
 
   // Participant management
@@ -315,9 +392,15 @@ function App() {
     setTokenState(newTokenState);
     saveToLocalStorage(STORAGE_KEYS.TOKEN_STATE, newTokenState);
     
-    // Update participant topic status
+    // Update participant topic status for previous holder
     if (tokenState.currentHolder && tokenState.currentTopicId) {
       updateParticipantTopicStatus(tokenState.currentHolder, tokenState.currentTopicId, false);
+    }
+    
+    // Update participant topic status for new holder - increment turn count
+    if (participantId && tokenState.currentTopicId) {
+      // Use false for isPassing since this is a normal token pass
+      updateParticipantTopicStatus(participantId, tokenState.currentTopicId, false);
     }
   };
 
@@ -365,53 +448,31 @@ function App() {
         hasPassed: isPassing ? true : existingStatus.hasPassed,
         turnCount: isPassing ? existingStatus.turnCount : existingStatus.turnCount + 1,
         passCount: isPassing ? existingStatus.passCount + 1 : existingStatus.passCount,
-        speakingTime: isPassing 
-          ? existingStatus.speakingTime 
-          : existingStatus.speakingTime + (tokenState.maxSpeakingTime - tokenState.timeRemaining)
+        // For speaking time, we don't modify it here since it's updated by the timer effect
       };
     } else {
-      // Create new status
+      // Create new status (shouldn't happen in normal flow)
       newStatus = {
         participantId,
         topicId,
         hasSpoken: !isPassing,
         hasPassed: isPassing,
+        speakingTime: 0,
         turnCount: isPassing ? 0 : 1,
-        passCount: isPassing ? 1 : 0,
-        speakingTime: isPassing ? 0 : (tokenState.maxSpeakingTime - tokenState.timeRemaining)
+        passCount: isPassing ? 1 : 0
       };
     }
     
-    const updatedStatuses = existingStatusIndex >= 0
-      ? [
-          ...participantTopicStatus.slice(0, existingStatusIndex),
-          newStatus,
-          ...participantTopicStatus.slice(existingStatusIndex + 1)
-        ]
-      : [...participantTopicStatus, newStatus];
-    
-    setParticipantTopicStatus(updatedStatuses);
-    saveToLocalStorage(STORAGE_KEYS.PARTICIPANT_TOPIC_STATUS, updatedStatuses);
-    
-    // Also update participant's overall stats
-    if (!isPassing) {
-      const participant = participants.find(p => p.id === participantId);
-      if (participant) {
-        const updatedParticipant = {
-          ...participant,
-          hasSpoken: true,
-          turnCount: participant.turnCount + 1,
-          speakingTime: participant.speakingTime + (tokenState.maxSpeakingTime - tokenState.timeRemaining)
-        };
-        
-        const updatedParticipants = participants.map(p => 
-          p.id === participantId ? updatedParticipant : p
-        );
-        
-        setParticipants(updatedParticipants);
-        saveToLocalStorage(STORAGE_KEYS.PARTICIPANTS, updatedParticipants);
-      }
+    // Update the status in the array
+    const newParticipantTopicStatus = [...participantTopicStatus];
+    if (existingStatusIndex >= 0) {
+      newParticipantTopicStatus[existingStatusIndex] = newStatus;
+    } else {
+      newParticipantTopicStatus.push(newStatus);
     }
+    
+    setParticipantTopicStatus(newParticipantTopicStatus);
+    // localStorage is now handled by the debounced effect
   };
 
   const handleTimeUp = useCallback(() => {
@@ -464,6 +525,7 @@ function App() {
       ...prev,
       isActive: true,
     }));
+    // The timer worker will be started by the effect that watches tokenState.isActive
   }, []);
   
   const handleTimerPause = useCallback(() => {
@@ -471,6 +533,7 @@ function App() {
       ...prev,
       isActive: false,
     }));
+    // The timer worker will be stopped by the effect that watches tokenState.isActive
   }, []);
   
   const handleTimerReset = useCallback(() => {
@@ -481,8 +544,9 @@ function App() {
       isActive: false,
     }));
     
-    // The useTimer hook will detect the change in initialTime and reset the timer
-  }, []);
+    // Reset the timer worker
+    resetTimer();
+  }, [resetTimer]);
 
   // Settings management
   const handleMaxSpeakingTimeChange = useCallback((value: number) => {
@@ -585,25 +649,645 @@ function App() {
     }
   }, [handleResetParticipants]);
 
+  // Handle ending the meeting
+  const handleEndMeeting = () => {
+    // Pause the token timer if it's active
+    if (tokenState.isActive) {
+      const newTokenState = {
+        ...tokenState,
+        isActive: false
+      };
+      setTokenState(newTokenState);
+      saveToLocalStorage(STORAGE_KEYS.TOKEN_STATE, newTokenState);
+      
+      // Explicitly stop the timer worker
+      stopTimer();
+    }
+    
+    // Small delay to ensure any final speaking time updates are processed
+    setTimeout(() => {
+      // Generate meeting statistics
+      const meetingStats = generateMeetingStats(
+        meetingStartTime,
+        participants,
+        topics,
+        participantTopicStatus
+      );
+      
+      // Update app state
+      const newAppState = {
+        isInMeeting: false,
+        currentMeetingStats: meetingStats
+      };
+      
+      setAppState(newAppState);
+      saveToLocalStorage(STORAGE_KEYS.APP_STATE, newAppState);
+      saveToLocalStorage(STORAGE_KEYS.MEETING_STATS, meetingStats);
+    }, 100);
+  };
+  
+  // Handle starting a new meeting
+  const handleStartNewMeeting = () => {
+    // Reset meeting state
+    const newStartTime = Date.now();
+    setMeetingStartTime(newStartTime);
+    
+    // Reset token state
+    const newTokenState = {
+      currentHolder: null,
+      previousHolder: null,
+      timeRemaining: tokenState.maxSpeakingTime,
+      isActive: false,
+      maxSpeakingTime: tokenState.maxSpeakingTime,
+      currentTopicId: null,
+    };
+    setTokenState(newTokenState);
+    
+    // Reset participant topic status
+    const resetParticipantTopicStatus: ParticipantTopicStatus[] = [];
+    setParticipantTopicStatus(resetParticipantTopicStatus);
+    
+    // Reset participants' speaking time and turn count
+    const resetParticipants = participants.map(p => ({
+      ...p,
+      hasSpoken: false,
+      speakingTime: 0,
+      turnCount: 0
+    }));
+    setParticipants(resetParticipants);
+    
+    // Update app state
+    const newAppState = {
+      isInMeeting: true,
+      currentMeetingStats: null
+    };
+    setAppState(newAppState);
+    
+    // Save all changes to local storage
+    saveToLocalStorage(STORAGE_KEYS.TOKEN_STATE, newTokenState);
+    saveToLocalStorage(STORAGE_KEYS.PARTICIPANT_TOPIC_STATUS, resetParticipantTopicStatus);
+    saveToLocalStorage(STORAGE_KEYS.PARTICIPANTS, resetParticipants);
+    saveToLocalStorage(STORAGE_KEYS.APP_STATE, newAppState);
+  };
+
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <Box sx={{ 
-        display: 'flex', 
-        flexDirection: 'column', 
-        height: '100vh', 
-        width: '100vw',
-        overflow: 'hidden',
-        margin: 0,
-        padding: 0
-      }}>
-        <AppBar position="static" sx={{ width: '100%' }}>
-          <Toolbar variant="dense">
-            <Typography 
-              variant="h6" 
-              component="div" 
-              className="app-title"
+      {appState.isInMeeting ? (
+        // Meeting view
+        <Box sx={{ 
+          display: 'flex', 
+          flexDirection: 'column', 
+          height: '100vh', 
+          width: '100vw',
+          overflow: 'hidden',
+          margin: 0,
+          padding: 0
+        }}>
+          <AppBar position="static" sx={{ width: '100%' }}>
+            <Toolbar variant="dense">
+              <Typography 
+                variant="h6" 
+                component="div" 
+                className="app-title"
+                sx={{ 
+                  flexGrow: 1, 
+                  fontFamily: '"Montserrat", sans-serif',
+                  fontWeight: 600,
+                  letterSpacing: '0.05em',
+                  background: 'linear-gradient(45deg, #FFF 30%, rgba(255,255,255,0.8) 90%)',
+                  WebkitBackgroundClip: 'text',
+                  WebkitTextFillColor: 'transparent',
+                  textShadow: '0px 1px 2px rgba(0,0,0,0.1)',
+                  fontSize: { xs: '1.1rem', sm: '1.25rem' }
+                }}
+              >
+                TALKING TOKEN
+              </Typography>
+              
+              <Button 
+                color="primary" 
+                size="small"
+                variant="contained"
+                onClick={handleEndMeeting}
+                sx={{ 
+                  mr: 2,
+                  bgcolor: 'white',
+                  color: 'primary.main',
+                  fontWeight: 'bold',
+                  '&:hover': {
+                    bgcolor: '#f5f5f5',
+                  },
+                  display: participants.length > 0 || topics.length > 0 ? 'inline-flex' : 'none'
+                }}
+              >
+                END MEETING
+              </Button>
+              
+              {(participants.length > 0 || topics.length > 0) && (
+                <Button 
+                  color="primary" 
+                  size="small"
+                  variant="contained"
+                  onClick={handleResetAll}
+                  sx={{ 
+                    mr: 2,
+                    bgcolor: 'white',
+                    color: 'primary.main',
+                    fontWeight: 'bold',
+                    '&:hover': {
+                      bgcolor: '#f5f5f5',
+                    }
+                  }}
+                >
+                  RESET ALL
+                </Button>
+              )}
+              
+              <IconButton
+                color="inherit"
+                aria-label="navigation menu"
+                aria-controls={menuOpen ? 'navigation-menu' : undefined}
+                aria-haspopup="true"
+                aria-expanded={menuOpen ? 'true' : undefined}
+                onClick={handleMenuClick}
+                edge="end"
+                sx={{ mr: 2 }}
+              >
+                <MenuIcon />
+              </IconButton>
+              <Menu
+                id="navigation-menu"
+                anchorEl={menuAnchorEl}
+                open={menuOpen}
+                onClose={handleMenuClose}
+                MenuListProps={{
+                  'aria-labelledby': 'navigation-button',
+                }}
+              >
+                <MenuItem onClick={(event) => handleSectionSelect('participants', event)}>
+                  <PeopleIcon sx={{ mr: 1 }} /> Participants
+                </MenuItem>
+                <MenuItem onClick={(event) => handleSectionSelect('topics', event)}>
+                  <TopicIcon sx={{ mr: 1 }} /> Topics
+                </MenuItem>
+                <MenuItem onClick={(event) => handleSectionSelect('settings', event)}>
+                  <SettingsIcon sx={{ mr: 1 }} /> Settings
+                </MenuItem>
+                <MenuItem onClick={(event) => handleSectionSelect('facilitator-guide', event)}>
+                  <HelpIcon sx={{ mr: 1 }} /> Facilitator Guide
+                </MenuItem>
+              </Menu>
+              
+              <Button 
+                color="inherit" 
+                startIcon={<GitHubIcon />}
+                href="https://github.com/andurilcode/talking-token"
+                target="_blank"
+                size="small"
+              >
+                GitHub
+              </Button>
+            </Toolbar>
+          </AppBar>
+          
+          <Popover
+            open={popoverOpen || showAddTopicForm || showEditTopicForm}
+            anchorEl={popoverAnchorEl}
+            onClose={showAddTopicForm ? handleCloseAddTopicForm : showEditTopicForm ? handleCloseEditTopicForm : handlePopoverClose}
+            anchorOrigin={{
+              vertical: 'bottom',
+              horizontal: 'right',
+            }}
+            transformOrigin={{
+              vertical: 'top',
+              horizontal: 'right',
+            }}
+            PaperProps={{
+              sx: { width: '80vw', maxWidth: '800px', maxHeight: '80vh', overflow: 'auto' }
+            }}
+          >
+            {showAddTopicForm ? (
+              <AddTopicForm 
+                onAddTopic={handleAddTopic}
+                onClose={handleCloseAddTopicForm}
+              />
+            ) : showEditTopicForm && topicToEdit ? (
+              <AddTopicForm 
+                onAddTopic={handleSaveEditedTopic}
+                onClose={handleCloseEditTopicForm}
+                initialTopic={topicToEdit}
+                isEditing={true}
+              />
+            ) : (
+              <>
+                {selectedSection === 'participants' && (
+                  <ParticipantManager 
+                    participants={participants}
+                    onAddParticipant={handleAddParticipant}
+                    onRemoveParticipant={handleRemoveParticipant}
+                    onResetParticipants={handleResetParticipants}
+                  />
+                )}
+                {selectedSection === 'topics' && (
+                  <TopicManager
+                    topics={topics}
+                    currentTopicId={tokenState.currentTopicId}
+                    onAddTopic={handleAddTopic}
+                    onEditTopic={handleEditTopic}
+                    onRemoveTopic={handleRemoveTopic}
+                    onSetActiveTopic={handleSetActiveTopic}
+                  />
+                )}
+                {selectedSection === 'settings' && (
+                  <Settings 
+                    maxSpeakingTime={tokenState.maxSpeakingTime}
+                    onMaxSpeakingTimeChange={handleMaxSpeakingTimeChange}
+                    tokenPassMethod={tokenPassMethod}
+                    onTokenPassMethodChange={handleTokenPassMethodChange}
+                  />
+                )}
+                {selectedSection === 'facilitator-guide' && (
+                  <FacilitatorGuide />
+                )}
+              </>
+            )}
+          </Popover>
+          
+          {/* Topic Menu */}
+          <Menu
+            id="topic-menu"
+            anchorEl={topicMenuAnchorEl}
+            open={topicMenuOpen}
+            onClose={handleCloseTopicMenu}
+            anchorOrigin={{
+              vertical: 'bottom',
+              horizontal: 'right',
+            }}
+            transformOrigin={{
+              vertical: 'top',
+              horizontal: 'right',
+            }}
+          >
+            <MenuItem onClick={handleOpenEditTopicForm}>
+              <EditIcon fontSize="small" sx={{ mr: 1 }} />
+              Edit Topic
+            </MenuItem>
+            <MenuItem onClick={handleDeleteTopic}>
+              <DeleteIcon fontSize="small" sx={{ mr: 1 }} />
+              Delete Topic
+            </MenuItem>
+          </Menu>
+          
+          <Box
+            sx={{ 
+              flexGrow: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+              width: '100%',
+              margin: 0,
+              padding: 0
+            }}
+          >
+            <Grid 
+              container 
+              spacing={0}
               sx={{ 
+                flexGrow: 1, 
+                height: '100%', 
+                margin: 0, 
+                width: '100%', 
+                maxWidth: '100%',
+                boxSizing: 'border-box'
+              }}
+            >
+              {/* Participant Rules Column */}
+              <Grid item xs={12} md={2.5} lg={2} sx={{ 
+                borderRight: 1, 
+                borderColor: 'divider', 
+                height: '100%', 
+                overflow: 'hidden',
+                padding: 0,
+                margin: 0
+              }}>
+                <ParticipantRules />
+              </Grid>
+              
+              {/* Main Content Area */}
+              <Grid item xs={12} md={9.5} lg={10} sx={{ 
+                height: '100%', 
+                overflow: 'auto',
+                padding: 0,
+                margin: 0,
+                display: 'flex',
+                flexDirection: 'column'
+              }}>
+                {/* All content in a single scrollable area */}
+                <Box sx={{ 
+                  display: 'flex',
+                  flexDirection: 'column',
+                  minHeight: '100%'
+                }}>
+                  <Grid 
+                    container 
+                    spacing={0}
+                    sx={{ 
+                      width: '100%',
+                      maxWidth: '100%',
+                      boxSizing: 'border-box',
+                      flexGrow: 0
+                    }}
+                  >
+                    {/* Timer and Current Topic */}
+                    <Grid item xs={12} md={6} sx={{ 
+                      borderBottom: { xs: 1, md: 0 }, 
+                      borderColor: 'divider',
+                      padding: 0,
+                      margin: 0
+                    }}>
+                      <Box sx={{ p: 2 }}>
+                        <TokenTimer 
+                          initialTime={tokenState.timeRemaining}
+                          isActive={tokenState.isActive}
+                          onTimeUp={handleTimeUp}
+                          onTimerStart={handleTimerStart}
+                          onTimerPause={handleTimerPause}
+                          onTimerReset={handleTimerReset}
+                          onPassToken={handlePassTokenWithoutSpeaking}
+                          currentHolder={getCurrentHolderName()}
+                        />
+                        
+                        {/* All Topics Section */}
+                        <Box sx={{ mt: 3 }}>
+                          <Paper elevation={3} sx={{ p: 3, mb: 3 }}>
+                            <Box sx={{ 
+                              display: 'flex', 
+                              justifyContent: 'space-between', 
+                              alignItems: 'center',
+                              mb: 2
+                            }}>
+                              <Typography variant="h6">
+                                All Topics
+                              </Typography>
+                              
+                              {topics.length > 0 && (
+                                <IconButton 
+                                  color="primary" 
+                                  size="small"
+                                  onClick={handleShowAddTopicForm}
+                                  sx={{ 
+                                    bgcolor: 'primary.main',
+                                    color: 'white',
+                                    '&:hover': {
+                                      bgcolor: 'primary.dark',
+                                    },
+                                    width: 36,
+                                    height: 36
+                                  }}
+                                  aria-label="Add new topic"
+                                >
+                                  <AddIcon />
+                                </IconButton>
+                              )}
+                            </Box>
+                            
+                            {topics.length === 0 ? (
+                              <Box sx={{ 
+                                display: 'flex', 
+                                flexDirection: 'column', 
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                py: 4
+                              }}>
+                                <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
+                                  No topics added yet.
+                                </Typography>
+                                <Button
+                                  variant="contained"
+                                  startIcon={<AddIcon />}
+                                  onClick={handleShowAddTopicForm}
+                                  sx={{
+                                    borderRadius: '28px',
+                                    px: 3
+                                  }}
+                                >
+                                  Add Topic
+                                </Button>
+                              </Box>
+                            ) : (
+                              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+                                {topics.map(topic => (
+                                  <Box 
+                                    key={topic.id}
+                                    sx={{ 
+                                      p: 1.5,
+                                      borderRadius: 1,
+                                      border: '1px solid',
+                                      borderColor: 'divider',
+                                      backgroundColor: tokenState.currentTopicId === topic.id 
+                                        ? 'primary.light' 
+                                        : 'background.paper',
+                                      cursor: 'pointer',
+                                      '&:hover': {
+                                        backgroundColor: tokenState.currentTopicId === topic.id 
+                                          ? 'primary.light' 
+                                          : 'action.hover',
+                                      },
+                                      boxShadow: tokenState.currentTopicId === topic.id ? 2 : 0,
+                                      transition: 'all 0.2s ease'
+                                    }}
+                                    onClick={() => handleSetActiveTopic(topic.id)}
+                                  >
+                                    <Box sx={{ 
+                                      display: 'flex', 
+                                      justifyContent: 'space-between', 
+                                      alignItems: 'center'
+                                    }}>
+                                      <Typography 
+                                        variant="subtitle1" 
+                                        sx={{ 
+                                          fontWeight: tokenState.currentTopicId === topic.id ? 'bold' : 'normal',
+                                          color: tokenState.currentTopicId === topic.id ? 'primary.contrastText' : 'text.primary'
+                                        }}
+                                      >
+                                        {topic.title}
+                                      </Typography>
+                                      
+                                      <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                                        {topic.description && (
+                                          <IconButton 
+                                            size="small" 
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              handleToggleTopicDescription(topic.id);
+                                            }}
+                                            sx={{ 
+                                              color: tokenState.currentTopicId === topic.id ? 'primary.contrastText' : 'action.active'
+                                            }}
+                                          >
+                                            {isTopicDescriptionCollapsed(topic.id) 
+                                              ? <KeyboardArrowDownIcon fontSize="small" /> 
+                                              : <KeyboardArrowUpIcon fontSize="small" />}
+                                          </IconButton>
+                                        )}
+                                        <IconButton 
+                                          size="small" 
+                                          onClick={(e) => handleOpenTopicMenu(e, topic.id)}
+                                          sx={{ 
+                                            color: tokenState.currentTopicId === topic.id ? 'primary.contrastText' : 'action.active',
+                                            ml: 0.5
+                                          }}
+                                        >
+                                          <MoreVertIcon fontSize="small" />
+                                        </IconButton>
+                                      </Box>
+                                    </Box>
+                                    
+                                    {/* Collapsible Description */}
+                                    {topic.description && !isTopicDescriptionCollapsed(topic.id) && (
+                                      <Box 
+                                        sx={{ 
+                                          mt: 1, 
+                                          pt: 1, 
+                                          borderTop: '1px solid',
+                                          borderColor: tokenState.currentTopicId === topic.id 
+                                            ? 'rgba(255,255,255,0.3)' 
+                                            : 'divider'
+                                        }}
+                                      >
+                                        <Typography 
+                                          variant="body2" 
+                                          sx={{ 
+                                            fontStyle: 'italic',
+                                            color: tokenState.currentTopicId === topic.id 
+                                              ? 'primary.contrastText' 
+                                              : 'text.secondary',
+                                            opacity: tokenState.currentTopicId === topic.id ? 0.9 : 1
+                                          }}
+                                        >
+                                          {topic.description}
+                                        </Typography>
+                                      </Box>
+                                    )}
+                                    
+                                    {/* Current Topic Indicator */}
+                                    {tokenState.currentTopicId === topic.id && (
+                                      <Typography 
+                                        variant="caption" 
+                                        sx={{ 
+                                          display: 'block', 
+                                          mt: 0.5, 
+                                          color: 'primary.contrastText',
+                                          fontWeight: 'bold'
+                                        }}
+                                      >
+                                        Current Topic
+                                      </Typography>
+                                    )}
+                                  </Box>
+                                ))}
+                              </Box>
+                            )}
+                          </Paper>
+                        </Box>
+                      </Box>
+                    </Grid>
+
+                    {/* Token Circle */}
+                    <Grid item xs={12} md={6} sx={{ 
+                      borderBottom: 1, 
+                      borderColor: 'divider',
+                      padding: 0,
+                      margin: 0
+                    }}>
+                      <Box sx={{ p: 2 }}>
+                        <TokenCircle 
+                          participants={participants}
+                          currentHolderId={tokenState.currentHolder}
+                          previousHolderId={tokenState.previousHolder}
+                          onParticipantClick={handlePassToken}
+                          onAddParticipant={() => {
+                            const event = { currentTarget: document.body } as React.MouseEvent<HTMLElement>;
+                            handleSectionSelect('participants', event);
+                          }}
+                        />
+                      </Box>
+                    </Grid>
+                  </Grid>
+
+                  {/* Participation Tracker with Collapse Toggle */}
+                  <Box sx={{ 
+                    borderTop: 1, 
+                    borderColor: 'divider'
+                  }}>
+                    <Box 
+                      sx={{ 
+                        display: 'flex', 
+                        justifyContent: 'space-between', 
+                        alignItems: 'center',
+                        px: 2,
+                        py: 1,
+                        cursor: 'pointer',
+                        bgcolor: 'background.paper',
+                        '&:hover': {
+                          bgcolor: 'action.hover'
+                        }
+                      }}
+                      onClick={handleToggleTracker}
+                    >
+                      <Typography variant="h6" component="h2">
+                        Participation Tracker
+                      </Typography>
+                      <IconButton size="small">
+                        {trackerCollapsed ? <ExpandMoreIcon /> : <ExpandLessIcon />}
+                      </IconButton>
+                    </Box>
+                    
+                    <Box sx={{ 
+                      p: 2, 
+                      display: trackerCollapsed ? 'none' : 'block'
+                    }}>
+                      <ParticipationTracker
+                        participants={participants}
+                        topics={topics}
+                        participantTopicStatus={participantTopicStatus}
+                        currentTopicId={tokenState.currentTopicId}
+                      />
+                    </Box>
+                  </Box>
+                </Box>
+              </Grid>
+            </Grid>
+          </Box>
+          
+          <Box 
+            component="footer"
+            sx={{
+              py: 0.5,
+              backgroundColor: 'background.paper',
+              borderTop: 1,
+              borderColor: 'divider',
+              textAlign: 'center',
+              width: '100%'
+            }}
+          >
+            <Typography variant="body2" color="text.secondary">
+              Talking Token App © {new Date().getFullYear()}
+            </Typography>
+          </Box>
+        </Box>
+      ) : (
+        // Meeting recap view
+        <Box sx={{ 
+          display: 'flex', 
+          flexDirection: 'column', 
+          height: '100vh',
+          overflow: 'hidden'
+        }}>
+          <AppBar position="static">
+            <Toolbar>
+              <Typography variant="h6" component="div" sx={{ 
                 flexGrow: 1, 
                 fontFamily: '"Montserrat", sans-serif',
                 fontWeight: 600,
@@ -613,504 +1297,49 @@ function App() {
                 WebkitTextFillColor: 'transparent',
                 textShadow: '0px 1px 2px rgba(0,0,0,0.1)',
                 fontSize: { xs: '1.1rem', sm: '1.25rem' }
-              }}
-            >
-              TALKING TOKEN
-            </Typography>
-            
-            {(participants.length > 0 || topics.length > 0) && (
+              }}>
+                TALKING TOKEN
+              </Typography>
+              
               <Button 
-                color="primary" 
+                color="inherit" 
+                startIcon={<GitHubIcon />}
+                href="https://github.com/andurilcode/talking-token"
+                target="_blank"
                 size="small"
-                variant="contained"
-                onClick={handleResetAll}
-                sx={{ 
-                  mr: 2,
-                  bgcolor: 'white',
-                  color: 'primary.main',
-                  fontWeight: 'bold',
-                  '&:hover': {
-                    bgcolor: '#f5f5f5',
-                  }
-                }}
               >
-                RESET ALL
+                GitHub
               </Button>
-            )}
-            
-            <IconButton
-              color="inherit"
-              aria-label="navigation menu"
-              aria-controls={menuOpen ? 'navigation-menu' : undefined}
-              aria-haspopup="true"
-              aria-expanded={menuOpen ? 'true' : undefined}
-              onClick={handleMenuClick}
-              edge="end"
-              sx={{ mr: 2 }}
-            >
-              <MenuIcon />
-            </IconButton>
-            <Menu
-              id="navigation-menu"
-              anchorEl={menuAnchorEl}
-              open={menuOpen}
-              onClose={handleMenuClose}
-              MenuListProps={{
-                'aria-labelledby': 'navigation-button',
-              }}
-            >
-              <MenuItem onClick={(event) => handleSectionSelect('participants', event)}>
-                <PeopleIcon sx={{ mr: 1 }} /> Participants
-              </MenuItem>
-              <MenuItem onClick={(event) => handleSectionSelect('topics', event)}>
-                <TopicIcon sx={{ mr: 1 }} /> Topics
-              </MenuItem>
-              <MenuItem onClick={(event) => handleSectionSelect('settings', event)}>
-                <SettingsIcon sx={{ mr: 1 }} /> Settings
-              </MenuItem>
-              <MenuItem onClick={(event) => handleSectionSelect('facilitator-guide', event)}>
-                <HelpIcon sx={{ mr: 1 }} /> Facilitator Guide
-              </MenuItem>
-            </Menu>
-            
-            <Button 
-              color="inherit" 
-              startIcon={<GitHubIcon />}
-              href="https://github.com/andurilcode/talking-token"
-              target="_blank"
-              size="small"
-            >
-              GitHub
-            </Button>
-          </Toolbar>
-        </AppBar>
-        
-        <Popover
-          open={popoverOpen || showAddTopicForm || showEditTopicForm}
-          anchorEl={popoverAnchorEl}
-          onClose={showAddTopicForm ? handleCloseAddTopicForm : showEditTopicForm ? handleCloseEditTopicForm : handlePopoverClose}
-          anchorOrigin={{
-            vertical: 'bottom',
-            horizontal: 'right',
-          }}
-          transformOrigin={{
-            vertical: 'top',
-            horizontal: 'right',
-          }}
-          PaperProps={{
-            sx: { width: '80vw', maxWidth: '800px', maxHeight: '80vh', overflow: 'auto' }
-          }}
-        >
-          {showAddTopicForm ? (
-            <AddTopicForm 
-              onAddTopic={handleAddTopic}
-              onClose={handleCloseAddTopicForm}
+            </Toolbar>
+          </AppBar>
+          
+          <Box sx={{ 
+            flexGrow: 1, 
+            overflow: 'auto'
+          }}>
+            <MeetingRecap 
+              meetingStats={appState.currentMeetingStats!}
+              onStartNewMeeting={handleStartNewMeeting}
             />
-          ) : showEditTopicForm && topicToEdit ? (
-            <AddTopicForm 
-              onAddTopic={handleSaveEditedTopic}
-              onClose={handleCloseEditTopicForm}
-              initialTopic={topicToEdit}
-              isEditing={true}
-            />
-          ) : (
-            <>
-              {selectedSection === 'participants' && (
-                <ParticipantManager 
-                  participants={participants}
-                  onAddParticipant={handleAddParticipant}
-                  onRemoveParticipant={handleRemoveParticipant}
-                  onResetParticipants={handleResetParticipants}
-                />
-              )}
-              {selectedSection === 'topics' && (
-                <TopicManager
-                  topics={topics}
-                  currentTopicId={tokenState.currentTopicId}
-                  onAddTopic={handleAddTopic}
-                  onEditTopic={handleEditTopic}
-                  onRemoveTopic={handleRemoveTopic}
-                  onSetActiveTopic={handleSetActiveTopic}
-                />
-              )}
-              {selectedSection === 'settings' && (
-                <Settings 
-                  maxSpeakingTime={tokenState.maxSpeakingTime}
-                  onMaxSpeakingTimeChange={handleMaxSpeakingTimeChange}
-                  tokenPassMethod={tokenPassMethod}
-                  onTokenPassMethodChange={handleTokenPassMethodChange}
-                />
-              )}
-              {selectedSection === 'facilitator-guide' && (
-                <FacilitatorGuide />
-              )}
-            </>
-          )}
-        </Popover>
-        
-        {/* Topic Menu */}
-        <Menu
-          id="topic-menu"
-          anchorEl={topicMenuAnchorEl}
-          open={topicMenuOpen}
-          onClose={handleCloseTopicMenu}
-          anchorOrigin={{
-            vertical: 'bottom',
-            horizontal: 'right',
-          }}
-          transformOrigin={{
-            vertical: 'top',
-            horizontal: 'right',
-          }}
-        >
-          <MenuItem onClick={handleOpenEditTopicForm}>
-            <EditIcon fontSize="small" sx={{ mr: 1 }} />
-            Edit Topic
-          </MenuItem>
-          <MenuItem onClick={handleDeleteTopic}>
-            <DeleteIcon fontSize="small" sx={{ mr: 1 }} />
-            Delete Topic
-          </MenuItem>
-        </Menu>
-        
-        <Box
-          sx={{ 
-            flexGrow: 1,
-            display: 'flex',
-            flexDirection: 'column',
-            overflow: 'hidden',
-            width: '100%',
-            margin: 0,
-            padding: 0
-          }}
-        >
-          <Grid 
-            container 
-            spacing={0}
-            sx={{ 
-              flexGrow: 1, 
-              height: '100%', 
-              margin: 0, 
-              width: '100%', 
-              maxWidth: '100%',
-              boxSizing: 'border-box'
+          </Box>
+          
+          <Box 
+            component="footer"
+            sx={{
+              py: 0.5,
+              backgroundColor: 'background.paper',
+              borderTop: 1,
+              borderColor: 'divider',
+              textAlign: 'center',
+              width: '100%'
             }}
           >
-            {/* Participant Rules Column */}
-            <Grid item xs={12} md={2.5} lg={2} sx={{ 
-              borderRight: 1, 
-              borderColor: 'divider', 
-              height: '100%', 
-              overflow: 'hidden',
-              padding: 0,
-              margin: 0
-            }}>
-              <ParticipantRules />
-            </Grid>
-            
-            {/* Main Content Area */}
-            <Grid item xs={12} md={9.5} lg={10} sx={{ 
-              height: '100%', 
-              overflow: 'auto',
-              padding: 0,
-              margin: 0,
-              display: 'flex',
-              flexDirection: 'column'
-            }}>
-              {/* All content in a single scrollable area */}
-              <Box sx={{ 
-                display: 'flex',
-                flexDirection: 'column',
-                minHeight: '100%'
-              }}>
-                <Grid 
-                  container 
-                  spacing={0}
-                  sx={{ 
-                    width: '100%',
-                    maxWidth: '100%',
-                    boxSizing: 'border-box',
-                    flexGrow: 0
-                  }}
-                >
-                  {/* Timer and Current Topic */}
-                  <Grid item xs={12} md={6} sx={{ 
-                    borderBottom: { xs: 1, md: 0 }, 
-                    borderColor: 'divider',
-                    padding: 0,
-                    margin: 0
-                  }}>
-                    <Box sx={{ p: 2 }}>
-                      <TokenTimer 
-                        initialTime={tokenState.timeRemaining}
-                        isActive={tokenState.isActive}
-                        onTimeUp={handleTimeUp}
-                        onTimerStart={handleTimerStart}
-                        onTimerPause={handleTimerPause}
-                        onTimerReset={handleTimerReset}
-                        onPassToken={handlePassTokenWithoutSpeaking}
-                        currentHolder={getCurrentHolderName()}
-                      />
-                      
-                      {/* All Topics Section */}
-                      <Box sx={{ mt: 3 }}>
-                        <Paper elevation={3} sx={{ p: 3, mb: 3 }}>
-                          <Box sx={{ 
-                            display: 'flex', 
-                            justifyContent: 'space-between', 
-                            alignItems: 'center',
-                            mb: 2
-                          }}>
-                            <Typography variant="h6">
-                              All Topics
-                            </Typography>
-                            
-                            {topics.length > 0 && (
-                              <IconButton 
-                                color="primary" 
-                                size="small"
-                                onClick={handleShowAddTopicForm}
-                                sx={{ 
-                                  bgcolor: 'primary.main',
-                                  color: 'white',
-                                  '&:hover': {
-                                    bgcolor: 'primary.dark',
-                                  },
-                                  width: 36,
-                                  height: 36
-                                }}
-                                aria-label="Add new topic"
-                              >
-                                <AddIcon />
-                              </IconButton>
-                            )}
-                          </Box>
-                          
-                          {topics.length === 0 ? (
-                            <Box sx={{ 
-                              display: 'flex', 
-                              flexDirection: 'column', 
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              py: 4
-                            }}>
-                              <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
-                                No topics added yet.
-                              </Typography>
-                              <Button
-                                variant="contained"
-                                startIcon={<AddIcon />}
-                                onClick={handleShowAddTopicForm}
-                                sx={{
-                                  borderRadius: '28px',
-                                  px: 3
-                                }}
-                              >
-                                Add Topic
-                              </Button>
-                            </Box>
-                          ) : (
-                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-                              {topics.map(topic => (
-                                <Box 
-                                  key={topic.id}
-                                  sx={{ 
-                                    p: 1.5,
-                                    borderRadius: 1,
-                                    border: '1px solid',
-                                    borderColor: 'divider',
-                                    backgroundColor: tokenState.currentTopicId === topic.id 
-                                      ? 'primary.light' 
-                                      : 'background.paper',
-                                    cursor: 'pointer',
-                                    '&:hover': {
-                                      backgroundColor: tokenState.currentTopicId === topic.id 
-                                        ? 'primary.light' 
-                                        : 'action.hover',
-                                    },
-                                    boxShadow: tokenState.currentTopicId === topic.id ? 2 : 0,
-                                    transition: 'all 0.2s ease'
-                                  }}
-                                  onClick={() => handleSetActiveTopic(topic.id)}
-                                >
-                                  <Box sx={{ 
-                                    display: 'flex', 
-                                    justifyContent: 'space-between', 
-                                    alignItems: 'center'
-                                  }}>
-                                    <Typography 
-                                      variant="subtitle1" 
-                                      sx={{ 
-                                        fontWeight: tokenState.currentTopicId === topic.id ? 'bold' : 'normal',
-                                        color: tokenState.currentTopicId === topic.id ? 'primary.contrastText' : 'text.primary'
-                                      }}
-                                    >
-                                      {topic.title}
-                                    </Typography>
-                                    
-                                    <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                                      {topic.description && (
-                                        <IconButton 
-                                          size="small" 
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            handleToggleTopicDescription(topic.id);
-                                          }}
-                                          sx={{ 
-                                            color: tokenState.currentTopicId === topic.id ? 'primary.contrastText' : 'action.active'
-                                          }}
-                                        >
-                                          {isTopicDescriptionCollapsed(topic.id) 
-                                            ? <KeyboardArrowDownIcon fontSize="small" /> 
-                                            : <KeyboardArrowUpIcon fontSize="small" />}
-                                        </IconButton>
-                                      )}
-                                      <IconButton 
-                                        size="small" 
-                                        onClick={(e) => handleOpenTopicMenu(e, topic.id)}
-                                        sx={{ 
-                                          color: tokenState.currentTopicId === topic.id ? 'primary.contrastText' : 'action.active',
-                                          ml: 0.5
-                                        }}
-                                      >
-                                        <MoreVertIcon fontSize="small" />
-                                      </IconButton>
-                                    </Box>
-                                  </Box>
-                                  
-                                  {/* Collapsible Description */}
-                                  {topic.description && !isTopicDescriptionCollapsed(topic.id) && (
-                                    <Box 
-                                      sx={{ 
-                                        mt: 1, 
-                                        pt: 1, 
-                                        borderTop: '1px solid',
-                                        borderColor: tokenState.currentTopicId === topic.id 
-                                          ? 'rgba(255,255,255,0.3)' 
-                                          : 'divider'
-                                      }}
-                                    >
-                                      <Typography 
-                                        variant="body2" 
-                                        sx={{ 
-                                          fontStyle: 'italic',
-                                          color: tokenState.currentTopicId === topic.id 
-                                            ? 'primary.contrastText' 
-                                            : 'text.secondary',
-                                          opacity: tokenState.currentTopicId === topic.id ? 0.9 : 1
-                                        }}
-                                      >
-                                        {topic.description}
-                                      </Typography>
-                                    </Box>
-                                  )}
-                                  
-                                  {/* Current Topic Indicator */}
-                                  {tokenState.currentTopicId === topic.id && (
-                                    <Typography 
-                                      variant="caption" 
-                                      sx={{ 
-                                        display: 'block', 
-                                        mt: 0.5, 
-                                        color: 'primary.contrastText',
-                                        fontWeight: 'bold'
-                                      }}
-                                    >
-                                      Current Topic
-                                    </Typography>
-                                  )}
-                                </Box>
-                              ))}
-                            </Box>
-                          )}
-                        </Paper>
-                      </Box>
-                    </Box>
-                  </Grid>
-
-                  {/* Token Circle */}
-                  <Grid item xs={12} md={6} sx={{ 
-                    borderBottom: 1, 
-                    borderColor: 'divider',
-                    padding: 0,
-                    margin: 0
-                  }}>
-                    <Box sx={{ p: 2 }}>
-                      <TokenCircle 
-                        participants={participants}
-                        currentHolderId={tokenState.currentHolder}
-                        previousHolderId={tokenState.previousHolder}
-                        onParticipantClick={handlePassToken}
-                        onAddParticipant={() => {
-                          const event = { currentTarget: document.body } as React.MouseEvent<HTMLElement>;
-                          handleSectionSelect('participants', event);
-                        }}
-                      />
-                    </Box>
-                  </Grid>
-                </Grid>
-
-                {/* Participation Tracker with Collapse Toggle */}
-                <Box sx={{ 
-                  borderTop: 1, 
-                  borderColor: 'divider'
-                }}>
-                  <Box 
-                    sx={{ 
-                      display: 'flex', 
-                      justifyContent: 'space-between', 
-                      alignItems: 'center',
-                      px: 2,
-                      py: 1,
-                      cursor: 'pointer',
-                      bgcolor: 'background.paper',
-                      '&:hover': {
-                        bgcolor: 'action.hover'
-                      }
-                    }}
-                    onClick={handleToggleTracker}
-                  >
-                    <Typography variant="h6" component="h2">
-                      Participation Tracker
-                    </Typography>
-                    <IconButton size="small">
-                      {trackerCollapsed ? <ExpandMoreIcon /> : <ExpandLessIcon />}
-                    </IconButton>
-                  </Box>
-                  
-                  <Box sx={{ 
-                    p: 2, 
-                    display: trackerCollapsed ? 'none' : 'block'
-                  }}>
-                    <ParticipationTracker
-                      participants={participants}
-                      topics={topics}
-                      participantTopicStatus={participantTopicStatus}
-                      currentTopicId={tokenState.currentTopicId}
-                    />
-                  </Box>
-                </Box>
-              </Box>
-            </Grid>
-          </Grid>
+            <Typography variant="body2" color="text.secondary">
+              Talking Token App © {new Date().getFullYear()}
+            </Typography>
+          </Box>
         </Box>
-        
-        <Box 
-          component="footer"
-          sx={{
-            py: 0.5,
-            backgroundColor: 'background.paper',
-            borderTop: 1,
-            borderColor: 'divider',
-            textAlign: 'center',
-            width: '100%'
-          }}
-        >
-          <Typography variant="body2" color="text.secondary">
-            Talking Token App © {new Date().getFullYear()}
-          </Typography>
-        </Box>
-      </Box>
+      )}
     </ThemeProvider>
   );
 }

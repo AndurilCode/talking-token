@@ -33,3 +33,29 @@ export interface TokenState {
 }
 
 export type TokenPassMethod = 'automatic' | 'facilitator'; 
+
+export interface TopicStats {
+  topicId: string;
+  title: string;
+  description?: string;
+  totalDuration: number; // Total time spent on this topic in seconds
+  participantStats: {
+    participantId: string;
+    name: string;
+    speakingTime: number;
+    turnCount: number;
+    passCount: number;
+  }[];
+}
+
+export interface MeetingStats {
+  startTime: number; // Timestamp when meeting started
+  endTime: number; // Timestamp when meeting ended
+  totalDuration: number; // Total meeting duration in seconds
+  topicStats: TopicStats[];
+}
+
+export interface AppState {
+  isInMeeting: boolean;
+  currentMeetingStats: MeetingStats | null;
+} 
