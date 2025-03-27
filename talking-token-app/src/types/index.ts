@@ -4,6 +4,7 @@ export interface Participant {
   hasSpoken: boolean;
   speakingTime: number; // Total time in seconds
   turnCount: number;    // Number of times they've had the token
+  passCount: number;    // Number of times they've passed on this topic
 }
 
 export interface Topic {
@@ -57,5 +58,6 @@ export interface MeetingStats {
 
 export interface AppState {
   isInMeeting: boolean;
+  isMeetingReady: boolean;
   currentMeetingStats: MeetingStats | null;
-} 
+}

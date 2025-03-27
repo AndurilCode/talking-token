@@ -40,10 +40,10 @@ import MeetingRecap from './components/MeetingRecap';
 const theme = createTheme({
   palette: {
     primary: {
-      main: '#2196f3',
+      main: '#00665A', // Updated main color
     },
     secondary: {
-      main: '#ff9800',
+      main: '#ff9800', // Keeping secondary color for now
     },
   },
   typography: {
@@ -110,19 +110,14 @@ function App() {
   // State for app state (meeting or recap)
   const [appState, setAppState] = useState<AppState>(() => 
     loadFromLocalStorage<AppState>(STORAGE_KEYS.APP_STATE, {
-      isInMeeting: true,
+      isInMeeting: false,
+      isMeetingReady: false,
       currentMeetingStats: null
     })
   );
-  
+
   // State for meeting start time
-  const [meetingStartTime, setMeetingStartTime] = useState<number>(() => {
-    // If we're in a meeting, set the start time to now if not already set
-    if (appState.isInMeeting && !appState.currentMeetingStats) {
-      return Date.now();
-    }
-    return 0;
-  });
+  const [meetingStartTime, setMeetingStartTime] = useState<number>(0);
 
   // Menu state
   const [menuAnchorEl, setMenuAnchorEl] = useState<null | HTMLElement>(null);
@@ -366,35 +361,64 @@ function App() {
       prev.filter(status => status.topicId !== id)
     );
   }, []);
-  
+
   const handleSetActiveTopic = useCallback((id: string) => {
-    setTokenState(prev => ({
-      ...prev,
-      currentTopicId: id
-    }));
-  }, []);
+    setTokenState(prevTokenState => {
+      // Only update if the topic is actually changing
+      if (prevTokenState.currentTopicId !== id) {
+        // Reset hasSpoken for all participants when changing topics
+        setParticipants(prevParticipants =>
+          prevParticipants.map(p => ({ ...p, hasSpoken: false }))
+        );
+        // Return the new token state with the updated topic ID
+        return {
+          ...prevTokenState,
+          currentTopicId: id,
+          // Resetting previousHolder might be good practice here too
+          previousHolder: null, 
+        };
+      }
+      // If the topic ID is the same, return the previous state unchanged
+      return prevTokenState; 
+    });
+  }, [setParticipants]); // Correct dependency
 
   // Token management
   const handlePassToken = (participantId: string) => {
     if (tokenState.currentHolder === participantId) {
       return; // Can't pass to self
     }
+
+    // Capture the ID of the participant who just finished speaking
+    const previousHolderId = tokenState.currentHolder;
     
     // Update token state
     const newTokenState = {
       ...tokenState,
-      previousHolder: tokenState.currentHolder,
+      previousHolder: previousHolderId, // Use the captured ID
       currentHolder: participantId,
-      timeRemaining: tokenState.maxSpeakingTime,
-      isActive: false // Pause timer when token is passed
+      timeRemaining: tokenState.maxSpeakingTime, // Reset timer duration
+      isActive: true // Start timer automatically when token is passed
     };
     
     setTokenState(newTokenState);
     saveToLocalStorage(STORAGE_KEYS.TOKEN_STATE, newTokenState);
+
+    // Reset the timer worker explicitly
+    resetTimer(); 
+
+    // Update the main 'hasSpoken' status for the participant who just spoke
+    if (previousHolderId) { // Use the captured ID
+      setParticipants(prevParticipants =>
+        prevParticipants.map(p =>
+          p.id === previousHolderId ? { ...p, hasSpoken: true } : p // Mark the previous holder as spoken
+        )
+      );
+    }
     
     // Update participant topic status for previous holder
-    if (tokenState.currentHolder && tokenState.currentTopicId) {
-      updateParticipantTopicStatus(tokenState.currentHolder, tokenState.currentTopicId, false);
+    if (previousHolderId && tokenState.currentTopicId) { // Use the captured ID
+      updateParticipantTopicStatus(previousHolderId, tokenState.currentTopicId, false);
     }
     
     // Update participant topic status for new holder - increment turn count
@@ -675,8 +699,9 @@ function App() {
       );
       
       // Update app state
-      const newAppState = {
+      const newAppState: AppState = {
         isInMeeting: false,
+        isMeetingReady: false, // Reset meeting readiness
         currentMeetingStats: meetingStats
       };
       
@@ -686,6 +711,21 @@ function App() {
     }, 100);
   };
   
+  // Handle starting the meeting
+  const handleStartMeeting = () => {
+    const newStartTime = Date.now();
+    setMeetingStartTime(newStartTime);
+    
+    // Update app state
+    const newAppState = {
+      ...appState,
+      isInMeeting: true,
+      isMeetingReady: true
+    };
+    setAppState(newAppState);
+    saveToLocalStorage(STORAGE_KEYS.APP_STATE, newAppState);
+  };
+
   // Handle starting a new meeting
   const handleStartNewMeeting = () => {
     // Reset meeting state
@@ -719,6 +759,7 @@ function App() {
     // Update app state
     const newAppState = {
       isInMeeting: true,
+      isMeetingReady: false,
       currentMeetingStats: null
     };
     setAppState(newAppState);
@@ -765,24 +806,40 @@ function App() {
                 TALKING TOKEN
               </Typography>
               
-              <Button 
-                color="primary" 
-                size="small"
-                variant="contained"
-                onClick={handleEndMeeting}
-                sx={{ 
-                  mr: 2,
-                  bgcolor: 'white',
-                  color: 'primary.main',
-                  fontWeight: 'bold',
-                  '&:hover': {
-                    bgcolor: '#f5f5f5',
-                  },
-                  display: participants.length > 0 || topics.length > 0 ? 'inline-flex' : 'none'
-                }}
-              >
-                END MEETING
-              </Button>
+              {!appState.isMeetingReady && participants.length > 0 && topics.length > 0 && (
+                <Button 
+                  color="success" 
+                  size="small"
+                  variant="contained"
+                  onClick={handleStartMeeting}
+                  sx={{ 
+                    mr: 2,
+                    fontWeight: 'bold',
+                  }}
+                >
+                  START MEETING
+                </Button>
+              )}
+              
+              {appState.isMeetingReady && (
+                <Button 
+                  color="primary" 
+                  size="small"
+                  variant="contained"
+                  onClick={handleEndMeeting}
+                  sx={{ 
+                    mr: 2,
+                    bgcolor: 'white',
+                    color: 'primary.main',
+                    fontWeight: 'bold',
+                    '&:hover': {
+                      bgcolor: '#f5f5f5',
+                    }
+                  }}
+                >
+                  END MEETING
+                </Button>
+              )}
               
               {(participants.length > 0 || topics.length > 0) && (
                 <Button 

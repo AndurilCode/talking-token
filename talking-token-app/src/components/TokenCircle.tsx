@@ -147,10 +147,54 @@ const TokenCircle: React.FC<TokenCircleProps> = ({
           const isCurrentHolder = participant.id === currentHolderId;
           const isPreviousHolder = participant.id === previousHolderId;
           
+          // Get participant status for styling
+          const getParticipantStyle = () => {
+            if (isCurrentHolder) {
+              return {
+                border: '3px solid #4caf50',
+                bgcolor: '#4caf50',
+                boxShadow: '0 0 15px rgba(76, 175, 80, 0.7)'
+              };
+            }
+            if (isPreviousHolder) {
+              return {
+                border: '3px solid #ff9800',
+                bgcolor: '#ff9800',
+                boxShadow: '0 2px 5px rgba(0,0,0,0.2)'
+              };
+            }
+            if (participant.hasSpoken) {
+              return {
+                border: '3px solid #e0e0e0',
+                bgcolor: '#9e9e9e',
+                boxShadow: '0 2px 5px rgba(0,0,0,0.2)',
+                opacity: 0.7
+              };
+            }
+            // Default style for participants who haven't spoken and are not current/previous
+            return {
+              border: 'none',
+              bgcolor: '#2196f3', // Default blue
+              boxShadow: '0 2px 5px rgba(0,0,0,0.2)'
+            };
+          };
+
+          const participantStyle = getParticipantStyle();
+          
           return (
             <Tooltip 
               key={participant.id} 
-              title={`${participant.name} (Turns: ${participant.turnCount})`}
+              title={
+                <Box>
+                  <Typography variant="body2">
+                    {participant.name}
+                  </Typography>
+                  <Typography variant="caption" component="div">
+                    Turns: {participant.turnCount}
+                    {participant.hasSpoken && ' • Has spoken'}
+                  </Typography>
+                </Box>
+              }
             >
               <Avatar
                 sx={{
@@ -160,28 +204,12 @@ const TokenCircle: React.FC<TokenCircleProps> = ({
                   top: containerSize / 2 - participantSize / 2 + y,
                   left: containerSize / 2 - participantSize / 2 + x,
                   cursor: 'pointer',
-                  border: isCurrentHolder 
-                    ? '3px solid #4caf50' 
-                    : isPreviousHolder 
-                      ? '3px solid #ff9800' 
-                      : participant.hasSpoken 
-                        ? '3px solid #e0e0e0' 
-                        : 'none',
-                  bgcolor: isCurrentHolder 
-                    ? '#4caf50' 
-                    : isPreviousHolder 
-                      ? '#ff9800' 
-                      : participant.hasSpoken 
-                        ? '#9e9e9e' 
-                        : '#2196f3',
+                  ...participantStyle,
                   transition: 'all 0.3s ease',
                   '&:hover': {
                     transform: 'scale(1.1)',
                   },
-                  zIndex: 2,
-                  boxShadow: isCurrentHolder 
-                    ? '0 0 15px rgba(76, 175, 80, 0.7)' 
-                    : '0 2px 5px rgba(0,0,0,0.2)'
+                  zIndex: 2
                 }}
                 onClick={() => onParticipantClick(participant.id)}
               >
@@ -330,4 +358,4 @@ const TokenPassingArrow: React.FC<TokenPassingArrowProps> = ({
   );
 };
 
-export default TokenCircle; 
+export default TokenCircle;

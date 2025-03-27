@@ -36,7 +36,8 @@ const ParticipantManager: React.FC<ParticipantManagerProps> = ({
         name: newParticipantName.trim(),
         hasSpoken: false,
         speakingTime: 0,
-        turnCount: 0
+        turnCount: 0,
+        passCount: 0
       };
       onAddParticipant(newParticipant);
       setNewParticipantName('');
